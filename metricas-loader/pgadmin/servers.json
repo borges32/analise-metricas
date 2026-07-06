@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Metricas Postgres",
+      "Group": "LGTM",
+      "Host": "metricas-postgres",
+      "Port": 5432,
+      "MaintenanceDB": "metricas",
+      "Username": "metricas",
+      "SSLMode": "prefer",
+      "Comment": "Schema metricas (loader Mimir -> Postgres). Senha: metricas"
+    }
+  }
+}

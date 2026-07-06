@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "app",
+  "name": "Análise de Métricas",
+  "id": "lgtm-analitico-app",
+  "info": {
+    "keywords": ["app", "metricas", "analise", "volumetria"],
+    "description": "Tela analítica de volumetria por app/série (Mimir -> Postgres).",
+    "author": { "name": "Alexandre Borges Fernandes" },
+    "logos": { "small": "img/logo.svg", "large": "img/logo.svg" },
+    "screenshots": [],
+    "version": "1.0.6",
+    "updated": "2026-07-05"
+  },
+  "includes": [
+    {
+      "type": "page",
+      "name": "Análise",
+      "path": "/a/lgtm-analitico-app",
+      "role": "Viewer",
+      "addToNav": true,
+      "defaultNav": true
+    }
+  ],
+  "dependencies": {
+    "grafanaDependency": ">=10.4.0",
+    "plugins": []
+  }
+}

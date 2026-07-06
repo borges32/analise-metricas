@@ -1,0 +1,9 @@
+apiVersion: 1
+
+# Habilita o app plugin e já vincula o datasource Postgres (jsonData).
+apps:
+  - type: lgtm-analitico-app
+    org_id: 1
+    disabled: false
+    jsonData:
+      datasourceUid: metricas-pg

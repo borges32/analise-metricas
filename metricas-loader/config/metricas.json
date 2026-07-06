@@ -1,0 +1,26 @@
+{
+  "metricas": [
+    {
+      "nome": "bradesco_app_mobilepf_total",
+      "produto": "mobilepf",
+      "labels": {
+        "app": "app",
+        "jornada": "jornada",
+        "escopo": "escopo",
+        "status": "status"
+      },
+      "ativa": true
+    },
+    {
+      "nome": "bradesco_app_pix_mobilepf_total",
+      "produto": "pix-mobilepf",
+      "labels": {
+        "app": "app",
+        "jornada": "jornada",
+        "escopo": "escopo",
+        "status": "status"
+      },
+      "ativa": true
+    }
+  ]
+}

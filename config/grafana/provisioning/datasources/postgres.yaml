@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  # Datasource de leitura do banco analítico (schema metricas) — usado pelo
+  # app plugin lgtm-analitico-app via getDataSourceSrv.
+  - name: Metricas Postgres
+    uid: metricas-pg
+    type: postgres
+    url: metricas-postgres:5432
+    user: metricas
+    jsonData:
+      database: metricas
+      sslmode: disable
+      postgresVersion: 1600
+    secureJsonData:
+      password: metricas

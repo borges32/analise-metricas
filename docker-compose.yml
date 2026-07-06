@@ -1,0 +1,230 @@
+name: lgtm-stack
+
+services:
+  # ---------------------------------------------------------------------------
+  # Mimir - armazenamento de métricas (Prometheus compatível)
+  # ---------------------------------------------------------------------------
+  mimir:
+    image: grafana/mimir:2.15.0
+    container_name: mimir
+    command:
+      - -config.file=/etc/mimir/mimir.yaml
+    volumes:
+      - ./config/mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
+      - mimir-data:/data
+    ports:
+      - "9009:9009" # http (push remote_write em /api/v1/push e OTLP em /otlp/v1/metrics)
+    networks:
+      - lgtm
+
+  # ---------------------------------------------------------------------------
+  # Loki - armazenamento de logs
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.5.0
+    container_name: loki
+    command:
+      - -config.file=/etc/loki/loki.yaml
+    volumes:
+      - ./config/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100" # http (OTLP em /otlp/v1/logs)
+    networks:
+      - lgtm
+
+  # ---------------------------------------------------------------------------
+  # Tempo - armazenamento de traces (gera span-metrics/service-graph p/ Mimir)
+  # ---------------------------------------------------------------------------
+  tempo:
+    image: grafana/tempo:2.7.0
+    container_name: tempo
+    command:
+      - -config.file=/etc/tempo/tempo.yaml
+    volumes:
+      - ./config/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200" # http (API de consulta)
+    networks:
+      - lgtm
+    depends_on:
+      - mimir
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry Collector - recebe OTLP da app e distribui p/ LGTM
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.148.0
+    container_name: otel-collector
+    command:
+      - --config=/etc/otel/otel-collector.yaml
+    volumes:
+      - ./config/otel/otel-collector.yaml:/etc/otel/otel-collector.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # métricas internas do collector (Prometheus)
+    networks:
+      - lgtm
+    depends_on:
+      - mimir
+      - loki
+      - tempo
+
+  # ---------------------------------------------------------------------------
+  # Grafana - visualização (datasources LGTM provisionados + correlação)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor traceToMetrics
+      # Permite carregar o app plugin local não-assinado.
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=lgtm-analitico-app
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./plugin-analitico/dist:/var/lib/grafana/plugins/lgtm-analitico-app:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - lgtm
+    depends_on:
+      - mimir
+      - loki
+      - tempo
+
+  # ---------------------------------------------------------------------------
+  # Aplicação geradora de telemetria (logs + traces + métricas via OTLP)
+  # ---------------------------------------------------------------------------
+  telemetry-generator:
+    build: ./app
+    container_name: telemetry-generator
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - DEPLOYMENT_ENVIRONMENT=dev
+    networks:
+      - lgtm
+    depends_on:
+      - otel-collector
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # MCP LGTM - servidor MCP (HTTP/Streamable + SSE) com tools de LGTM p/ IA/N8N
+  # ---------------------------------------------------------------------------
+  #mcp-lgtm:
+    #build: ./mcp
+    #container_name: mcp-lgtm
+    #environment:
+      #- PORT=3002
+      #- GRAFANA_URL=http://grafana:3000
+      #- GRAFANA_USER=admin
+      #- GRAFANA_PASSWORD=admin
+      #- LOKI_URL=http://loki:3100
+      #- TEMPO_URL=http://tempo:3200
+      #- MIMIR_URL=http://mimir:9009
+      #- MIMIR_TENANT=anonymous
+    #ports:
+      #- "3002:3002"
+    #networks:
+      #- lgtm
+    #depends_on:
+      #- grafana
+      #- loki
+      #- tempo
+      #- mimir
+    #restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Postgres - destino analítico do metricas-loader (schema `metricas`)
+  # ---------------------------------------------------------------------------
+  metricas-postgres:
+    image: postgres:16
+    container_name: metricas-postgres
+    environment:
+      POSTGRES_USER: metricas
+      POSTGRES_PASSWORD: metricas
+      POSTGRES_DB: metricas
+    volumes:
+      # DDL aplicado no primeiro boot (schema, procedures, functions, partições).
+      - ./metricas-loader/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - metricas-pg-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - lgtm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metricas -d metricas"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ---------------------------------------------------------------------------
+  # metricas-loader - carga contínua Mimir -> Postgres (worker a cada 10 min)
+  # ---------------------------------------------------------------------------
+  metricas-loader:
+    build: ./metricas-loader
+    container_name: metricas-loader
+    environment:
+      POSTGRES_DSN: postgresql://metricas:metricas@metricas-postgres:5432/metricas
+      # Mimir expõe a API Prometheus sob o prefixo /prometheus.
+      MIMIR_URL: http://mimir:9009/prometheus
+      MIMIR_TENANT: anonymous
+      INTERVALO_SEGUNDOS: "600"
+      JANELA_MINUTOS: "30"
+      ATRASO_MINUTOS: "3"
+      JANELA_INICIAL_MINUTOS: "60"
+      CONFIG_METRICAS_PATH: /app/config/metricas.json
+      LOG_LEVEL: INFO
+      MODO: worker
+    volumes:
+      - ./metricas-loader/config:/app/config:ro
+    depends_on:
+      metricas-postgres:
+        condition: service_healthy
+      mimir:
+        condition: service_started
+    networks:
+      - lgtm
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # pgAdmin - visualização do Postgres (conexão pré-provisionada)
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    volumes:
+      # Servidor "Metricas Postgres" já cadastrado ao abrir.
+      - ./metricas-loader/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - pgadmin-data:/var/lib/pgadmin
+    ports:
+      - "5050:80"
+    networks:
+      - lgtm
+    depends_on:
+      - metricas-postgres
+    restart: unless-stopped
+
+networks:
+  lgtm:
+    external: true
+    name: lgtm-shared
+
+volumes:
+  mimir-data:
+  loki-data:
+  tempo-data:
+  grafana-data:
+  metricas-pg-data:
+  pgadmin-data:

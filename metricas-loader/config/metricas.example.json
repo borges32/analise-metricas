@@ -1,0 +1,26 @@
+{
+  "metricas": [
+    {
+      "nome": "bradesco_app_pix_total",
+      "produto": "pix",
+      "labels": {
+        "app": "app",
+        "jornada": "jornada",
+        "escopo": "escopo",
+        "status": "status"
+      },
+      "ativa": true
+    },
+    {
+      "nome": "bradesco_app_cartoes_total",
+      "produto": "cartoes",
+      "labels": {
+        "app": "app",
+        "jornada": "jornada",
+        "escopo": "escopo",
+        "status": "status"
+      },
+      "ativa": true
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+# OpenTelemetry Collector (contrib) - hub OTLP da stack LGTM.
+# Recebe OTLP da aplicação e roteia:
+#   traces  -> Tempo  (OTLP gRPC)
+#   metrics -> Mimir  (Prometheus remote_write, com exemplars)
+#   logs    -> Loki   (OTLP HTTP)
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+  memory_limiter:
+    check_interval: 2s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  resourcedetection:
+    detectors: [env, system]
+    override: false
+  # Converte métricas com temporalidade DELTA em CUMULATIVE (o Mimir/Prometheus
+  # é cumulativo). Métricas já cumulativas passam sem alteração.
+  deltatocumulative:
+    max_stale: 5m
+
+exporters:
+  # Traces -> Tempo
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  # Logs -> Loki (endpoint OTLP nativo do Loki 3.x)
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+  # Métricas -> Mimir via remote_write. resource_to_telemetry_conversion
+  # transforma atributos de recurso (service.name, workload, ...) em labels,
+  # permitindo correlacionar com logs/traces.
+  prometheusremotewrite/mimir:
+    endpoint: http://mimir:9009/api/v1/push
+    tls:
+      insecure: true
+    add_metric_suffixes: true
+    target_info:
+      enabled: true
+    resource_to_telemetry_conversion:
+      enabled: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, deltatocumulative, batch]
+      exporters: [prometheusremotewrite/mimir]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [otlphttp/loki]
+  telemetry:
+    metrics:
+      level: detailed
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8889
