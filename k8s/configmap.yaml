@@ -1,0 +1,66 @@
+# -----------------------------------------------------------------------------
+# ConfigMap com variáveis NÃO sensíveis do worker (as sensíveis vão no Secret).
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metricas-loader-config
+  namespace: metricas
+  labels:
+    app.kubernetes.io/name: metricas-loader
+    app.kubernetes.io/part-of: analise-metricas
+data:
+  # Mimir expõe a API Prometheus sob o prefixo /prometheus.
+  MIMIR_URL: "http://mimir.metricas.svc.cluster.local:9009/prometheus"
+  MIMIR_TENANT: "anonymous"
+  MIMIR_TIMEOUT_SEGUNDOS: "60"
+  INTERVALO_SEGUNDOS: "600"
+  JANELA_MINUTOS: "30"
+  ATRASO_MINUTOS: "3"
+  JANELA_INICIAL_MINUTOS: "60"
+  CONFIG_METRICAS_PATH: "/app/config/metricas.json"
+  LOG_LEVEL: "INFO"
+  MODO: "worker"
+---
+# -----------------------------------------------------------------------------
+# ConfigMap com o JSON de métricas a carregar. Montado em /app/config.
+# É recarregado a cada rodada do worker — editar este ConfigMap adiciona/remove
+# métricas sem reiniciar o pod (o kubelet propaga a mudança do arquivo em ~1 min).
+# Mantenha o conteúdo em sincronia com metricas-loader/config/metricas.json.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metricas-loader-metricas
+  namespace: metricas
+  labels:
+    app.kubernetes.io/name: metricas-loader
+    app.kubernetes.io/part-of: analise-metricas
+data:
+  metricas.json: |
+    {
+      "metricas": [
+        {
+          "nome": "bradesco_app_mobilepf_total",
+          "produto": "mobilepf",
+          "labels": {
+            "app": "app",
+            "jornada": "jornada",
+            "escopo": "escopo",
+            "status": "status"
+          },
+          "ativa": true
+        },
+        {
+          "nome": "bradesco_app_pix_mobilepf_total",
+          "produto": "pix-mobilepf",
+          "labels": {
+            "app": "app",
+            "jornada": "jornada",
+            "escopo": "escopo",
+            "status": "status"
+          },
+          "ativa": true
+        }
+      ]
+    }

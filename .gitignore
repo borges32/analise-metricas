@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# k8s / OpenShift — Secret real com credenciais (use secret.example.yaml como base)
+k8s/secret.yaml

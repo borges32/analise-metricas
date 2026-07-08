@@ -1,0 +1,21 @@
+# Base kustomize do metricas-loader para ARO OpenShift.
+#
+#   oc apply -k k8s/            # aplica os recursos base (worker)
+#
+# NÃO inclui:
+#   - secret.yaml            -> crie a partir de secret.example.yaml (dados sensíveis)
+#   - optional-postgres.yaml -> só para POC; em ARO use banco gerenciado
+#   - build.yaml             -> aplique à parte se for buildar no cluster
+#   - job-backfill.yaml      -> Job pontual, aplicado sob demanda
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: metricas
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - deployment.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: analise-metricas

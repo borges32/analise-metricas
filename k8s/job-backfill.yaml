@@ -1,0 +1,69 @@
+# -----------------------------------------------------------------------------
+# Job pontual de BACKFILL — recarrega um período do Mimir dia a dia (sem loop).
+# Ajuste BACKFILL_INICIO / BACKFILL_FIM e aplique:
+#
+#   oc -n metricas apply -f job-backfill.yaml
+#   oc -n metricas logs -f job/metricas-backfill
+#
+# Reaplicar exige apagar o Job anterior (Jobs são imutáveis):
+#   oc -n metricas delete job metricas-backfill --ignore-not-found
+# -----------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: metricas-backfill
+  namespace: metricas
+  labels:
+    app.kubernetes.io/name: metricas-loader
+    app.kubernetes.io/component: backfill
+    app.kubernetes.io/part-of: analise-metricas
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metricas-loader
+        app.kubernetes.io/component: backfill
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: metricas-backfill
+          image: image-registry.openshift-image-registry.svc:5000/metricas/metricas-loader:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: metricas-loader-config
+            - secretRef:
+                name: metricas-loader-secret
+          env:
+            - name: MODO
+              value: "backfill"
+            - name: BACKFILL_INICIO
+              value: "2026-01-01"
+            - name: BACKFILL_FIM
+              value: "2026-01-31"
+          volumeMounts:
+            - name: metricas-config
+              mountPath: /app/config
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: metricas-config
+          configMap:
+            name: metricas-loader-metricas

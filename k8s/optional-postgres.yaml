@@ -1,0 +1,115 @@
+# =============================================================================
+# OPCIONAL — Postgres interno no cluster.
+#
+# Em ARO, o RECOMENDADO é usar um banco gerenciado (Azure Database for
+# PostgreSQL Flexible Server) e apenas apontar o POSTGRES_DSN do Secret para ele.
+# Use este manifesto só para ambientes de teste/POC dentro do cluster.
+#
+# A imagem postgres:16 (Docker Hub) roda com UID fixo e exige uma SCC permissiva:
+#   oc -n metricas adm policy add-scc-to-user anyuid -z metricas-postgres
+# (ou troque pela imagem sclorg/RHEL que suporta UID arbitrário).
+#
+# O schema é aplicado no primeiro boot a partir de um ConfigMap gerado do init.sql:
+#   oc -n metricas create configmap metricas-postgres-init \
+#     --from-file=init.sql=metricas-loader/sql/init.sql
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: metricas-postgres
+  namespace: metricas
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: metricas-postgres-secret
+  namespace: metricas
+  labels:
+    app.kubernetes.io/name: metricas-postgres
+    app.kubernetes.io/part-of: analise-metricas
+type: Opaque
+stringData:
+  POSTGRES_USER: metricas
+  POSTGRES_PASSWORD: metricas
+  POSTGRES_DB: metricas
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metricas-postgres
+  namespace: metricas
+  labels:
+    app.kubernetes.io/name: metricas-postgres
+    app.kubernetes.io/part-of: analise-metricas
+spec:
+  selector:
+    app.kubernetes.io/name: metricas-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: metricas-postgres
+  namespace: metricas
+  labels:
+    app.kubernetes.io/name: metricas-postgres
+    app.kubernetes.io/part-of: analise-metricas
+spec:
+  serviceName: metricas-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metricas-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metricas-postgres
+        app.kubernetes.io/part-of: analise-metricas
+    spec:
+      serviceAccountName: metricas-postgres
+      containers:
+        - name: postgres
+          image: postgres:16
+          envFrom:
+            - secretRef:
+                name: metricas-postgres-secret
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "metricas", "-d", "metricas"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: init
+          configMap:
+            name: metricas-postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

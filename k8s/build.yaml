@@ -1,0 +1,53 @@
+# -----------------------------------------------------------------------------
+# Build da imagem DENTRO do ARO OpenShift (opcional).
+# Usa o registry interno do OpenShift. Alternativa: buildar fora (CI/ACR) e só
+# referenciar a imagem no deployment.yaml.
+#
+# Após aplicar, dispare o build a partir do fonte local (sem precisar de webhook):
+#   oc -n metricas start-build metricas-loader \
+#     --from-dir=metricas-loader --follow
+#
+# Ou aponte o BuildConfig para o Git preenchendo spec.source.git (comentado abaixo).
+# -----------------------------------------------------------------------------
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: metricas-loader
+  namespace: metricas
+  labels:
+    app.kubernetes.io/name: metricas-loader
+    app.kubernetes.io/part-of: analise-metricas
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: metricas-loader
+  namespace: metricas
+  labels:
+    app.kubernetes.io/name: metricas-loader
+    app.kubernetes.io/part-of: analise-metricas
+spec:
+  source:
+    type: Binary
+    binary: {}
+    # Para buildar direto do Git em vez de --from-dir, comente o bloco acima e use:
+    # type: Git
+    # git:
+    #   uri: https://github.com/<org>/analise-metricas.git
+    #   ref: main
+    contextDir: metricas-loader
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: metricas-loader:latest
+  # Rebuilda automaticamente quando a imagem base (python:3.12-slim) muda.
+  triggers:
+    - type: ConfigChange
+    - type: ImageChange

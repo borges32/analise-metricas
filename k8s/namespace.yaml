@@ -1,0 +1,9 @@
+# Projeto (namespace) do ARO OpenShift onde o metricas-loader roda.
+# No OpenShift, criar via `oc new-project metricas` cria o mesmo objeto com
+# anotações extras. Este manifesto serve para GitOps/kustomize.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metricas
+  labels:
+    app.kubernetes.io/part-of: analise-metricas
