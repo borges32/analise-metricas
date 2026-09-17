@@ -39,32 +39,11 @@ DECLARE
   d_ini  date := (current_date - (meses || ' months')::interval)::date;
   d_fim  date := current_date - 1;   -- até ontem (último dia fechado)
   d      date;
-  pw     date;
-  pm     date;
-  nome   text;
 BEGIN
   RAISE NOTICE 'Período: % a % (fuso %)', d_ini, d_fim, tz;
 
   -- 1) Partições históricas (criar_particoes só cobre presente->futuro).
-  pw := date_trunc('week', d_ini)::date;
-  WHILE pw <= d_fim LOOP
-    nome := format('metrica_minuto_%s', to_char(pw, 'IYYY"w"IW'));
-    IF to_regclass('metricas.' || nome) IS NULL THEN
-      EXECUTE format('CREATE TABLE metricas.%I PARTITION OF metricas.metrica_minuto
-                      FOR VALUES FROM (%L) TO (%L)', nome, pw, pw + 7);
-    END IF;
-    pw := pw + 7;
-  END LOOP;
-
-  pm := date_trunc('month', d_ini)::date;
-  WHILE pm <= d_fim LOOP
-    nome := format('metrica_minuto_app_%s', to_char(pm, 'YYYY_MM'));
-    IF to_regclass('metricas.' || nome) IS NULL THEN
-      EXECUTE format('CREATE TABLE metricas.%I PARTITION OF metricas.metrica_minuto_app
-                      FOR VALUES FROM (%L) TO (%L)', nome, pm, (pm + interval '1 month')::date);
-    END IF;
-    pm := (pm + interval '1 month')::date;
-  END LOOP;
+  PERFORM metricas.criar_particoes_intervalo(d_ini, d_fim);
 
   -- 2) Carga dia a dia (minuto a minuto), via procedures do fluxo real.
   FOR d IN SELECT generate_series(d_ini, d_fim, interval '1 day')::date LOOP

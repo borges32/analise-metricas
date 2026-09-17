@@ -10,6 +10,16 @@
 - Recorde de minuto atualizado de forma **incremental** (nunca varre 24 meses).
 - Rollup `metrica_minuto_app` **mantido** como fonte do nível app (gráfico em 1 range scan e jobs de 90 dias ~25× mais baratos).
 
+> **DDL executável:** este documento é a *referência de modelagem*. O SQL que
+> realmente roda vive num **arquivo único e idempotente**,
+> `metricas-loader/src/loader/sql/schema.sql`, aplicado pelo próprio
+> `metricas-loader` no boot (não existem migrations incrementais). Ao alterar o
+> modelo aqui, altere lá — e vice-versa. Duas diferenças deliberadas no arquivo
+> executável: todas as rotinas fixam `SET search_path = metricas, pg_catalog`
+> (para funcionarem com qualquer usuário do banco) e existe
+> `criar_particoes_intervalo(p_ini, p_fim)` para partições retroativas
+> (backfill/import CSV).
+
 **Requisitos:** PostgreSQL 14+ (recomendado 15/16). Fuso de negócio: `America/Sao_Paulo`. Timestamps em UTC (`timestamptz`).
 **Infra:** ~250–280 GB em regime estável (24 meses de minuto por série); recomendado 64 GB+ de RAM e SSD/NVMe.
 
@@ -232,9 +242,18 @@ BEGIN
     ON CONFLICT (serie_id, ts) DO UPDATE SET valor = EXCLUDED.valor;
 
     -- 3. Rollup por app
+    -- Recalculado a partir de metrica_minuto (não da staging): a staging pode
+    -- conter só um subconjunto das métricas (carga histórica por métrica), e
+    -- somar só ela apagaria a contribuição de outros produtos do mesmo app.
     INSERT INTO metrica_minuto_app (ts, app, valor)
-    SELECT ts, app, sum(valor) FROM staging_metrica
-    GROUP BY ts, app
+    SELECT m.ts, d.app, sum(m.valor)
+    FROM metrica_minuto m
+    JOIN dim_serie d USING (serie_id)
+    JOIN (SELECT DISTINCT app, ts FROM staging_metrica) a
+      ON a.app = d.app AND a.ts = m.ts
+    WHERE m.ts >= (SELECT min(ts) FROM staging_metrica)
+      AND m.ts <= (SELECT max(ts) FROM staging_metrica)
+    GROUP BY m.ts, d.app
     ON CONFLICT (app, ts) DO UPDATE SET valor = EXCLUDED.valor;
 
     -- 4. Totais diários — nível APP (recalcula dias tocados)
@@ -481,14 +500,24 @@ ORDER BY jornada, escopo, status;
 
 ## 11. Sequência de instalação
 
+Não é manual: basta apontar o `metricas-loader` para um banco **vazio**. Ele
+aplica todo o DDL (seções 1 a 10 + partições iniciais) no boot, de forma
+idempotente e protegida por advisory lock.
+
+```bash
+# Provisionar sem subir o worker (Job/initContainer):
+MODO=schema POSTGRES_DSN=... python -m loader
+
+# Ou aplicar o arquivo à mão:
+psql "$POSTGRES_DSN" -v ON_ERROR_STOP=1 -f metricas-loader/src/loader/sql/schema.sql
+```
+
+Depois disso:
+
 ```sql
--- 1. Executar seções 1 a 6 (schema, tabelas, staging)
--- 2. Executar seções 7 a 10 (funções, procedures)
--- 3. Criar as partições iniciais:
-SELECT metricas.criar_particoes(4, 2);
--- 4. (Opcional) Agendar jobs — seção 9
--- 5. Carga: COPY metricas.staging_metrica (FORMAT BINARY) → CALL metricas.processar_staging();
--- 6. Backfill do recorde: CALL metricas.atualizar_stats_alvo(dia) para cada dia histórico
+-- (Opcional) Agendar jobs — seção 9
+-- Carga: COPY metricas.staging_metrica (FORMAT BINARY) → CALL metricas.processar_staging();
+-- Backfill do recorde: CALL metricas.atualizar_stats_alvo(dia) para cada dia histórico
 ```
 
 ---

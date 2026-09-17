@@ -8,7 +8,7 @@ import threading
 from datetime import timedelta
 from pathlib import Path
 
-from . import db
+from . import db, schema
 from .config_metricas import carregar_config_metricas
 from .mimir import criar_mimir_client
 from .pipeline import agora_utc, calcular_janela, carregar_janela, dias_fechados
@@ -43,6 +43,8 @@ class Worker:
         self._instalar_sinais()
         mimir = criar_mimir_client(self.s)
         conn = db.conectar(self.s.postgres_dsn)
+        if self.s.aplicar_schema:
+            schema.aplicar_schema(conn)  # cria toda a estrutura se o banco estiver vazio
         backoff = _BACKOFF_INICIAL
         log.info("worker iniciado", extra={"metrica": self.s.modo})
         try:

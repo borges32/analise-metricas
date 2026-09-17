@@ -48,7 +48,11 @@ class Settings(BaseSettings):
     config_metricas_path: str = Field("/app/config/metricas.json", alias="CONFIG_METRICAS_PATH")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
-    modo: Literal["worker", "backfill"] = Field("worker", alias="MODO")
+    # O loader provisiona o schema `metricas` no boot (DDL único e idempotente).
+    # Desligue apenas se o banco for gerenciado por outro processo/DBA.
+    aplicar_schema: bool = Field(True, alias="APLICAR_SCHEMA")
+
+    modo: Literal["worker", "backfill", "schema"] = Field("worker", alias="MODO")
     backfill_inicio: date | None = Field(None, alias="BACKFILL_INICIO")
     backfill_fim: date | None = Field(None, alias="BACKFILL_FIM")
 

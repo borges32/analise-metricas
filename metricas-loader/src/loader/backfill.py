@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import db
+from . import db, schema
 from .config_metricas import carregar_config_metricas
 from .mimir import criar_mimir_client
 from .pipeline import agora_utc, carregar_janela, subjanelas
@@ -22,6 +22,8 @@ def executar_backfill(settings: Settings) -> int:
     mimir = criar_mimir_client(settings)
     conn = db.conectar(settings.postgres_dsn)
     try:
+        if settings.aplicar_schema:
+            schema.aplicar_schema(conn)
         db.criar_particoes(conn)
         conn.commit()
 

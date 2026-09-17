@@ -24,9 +24,12 @@ apenas um `Deployment` de 1 réplica.
 
 - CLI `oc` autenticado no cluster ARO (`oc login ...`).
 - Um Mimir acessível pelo cluster (ajuste `MIMIR_URL` no `configmap.yaml`).
-- Um Postgres de destino com o schema `metricas` já criado
-  (`metricas-loader/sql/init.sql`). Em ARO, o recomendado é o **Azure Database
-  for PostgreSQL Flexible Server**.
+- Um Postgres de destino **vazio** (banco criado, sem schema): o próprio worker
+  provisiona o schema `metricas` no boot a partir do DDL único embarcado
+  (`metricas-loader/src/loader/sql/schema.sql`), de forma idempotente. O usuário
+  do `POSTGRES_DSN` precisa de permissão de DDL no banco (`CREATE` no database).
+  Para provisionar sem subir o worker: `MODO=schema` (roda o DDL e sai).
+  Em ARO, o recomendado é o **Azure Database for PostgreSQL Flexible Server**.
 
 ## Passo a passo
 

@@ -21,6 +21,9 @@ data:
   CONFIG_METRICAS_PATH: "/app/config/metricas.json"
   LOG_LEVEL: "INFO"
   MODO: "worker"
+  # O worker aplica o DDL único e idempotente no boot (cria schema, tabelas,
+  # partições, procedures e functions). Só desligue se um DBA gerenciar o banco.
+  APLICAR_SCHEMA: "true"
 ---
 # -----------------------------------------------------------------------------
 # ConfigMap com o JSON de métricas a carregar. Montado em /app/config.

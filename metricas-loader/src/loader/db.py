@@ -9,7 +9,7 @@ Regras invioláveis (README seção 8):
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import psycopg
 
@@ -99,36 +99,11 @@ def atualizar_perfil_mediano(conn: psycopg.Connection) -> None:
 
 
 def criar_particoes_intervalo(conn: psycopg.Connection, d_ini: date, d_fim: date) -> None:
-    """Cria partições RETROATIVAS cobrindo [d_ini, d_fim].
+    """Cria partições RETROATIVAS cobrindo [d_ini, d_fim] (idempotente).
 
-    Mesma convenção de nomes de `criar_particoes()` (semanal ISO em metrica_minuto,
-    mensal em metrica_minuto_app), de forma idempotente (CREATE TABLE IF NOT EXISTS).
-    Necessário para carga histórica: `criar_particoes()` só cobre presente->futuro.
+    `criar_particoes()` só cobre presente->futuro; a carga histórica (backfill /
+    import CSV) precisa das semanas/meses passados. A lógica de nomes vive no
+    schema (`metricas.criar_particoes_intervalo`), fonte única do DDL.
     """
-    stmts: list[tuple[str, date, date, str]] = []
-
-    # Semanais (metrica_minuto): segunda-feira a segunda-feira (ISO week).
-    pw = d_ini - timedelta(days=d_ini.weekday())  # segunda da semana de d_ini
-    while pw <= d_fim:
-        iso_year, iso_week, _ = pw.isocalendar()
-        nome = f"metrica_minuto_{iso_year}w{iso_week:02d}"
-        stmts.append((nome, pw, pw + timedelta(days=7), "metrica_minuto"))
-        pw += timedelta(days=7)
-
-    # Mensais (metrica_minuto_app).
-    pm = d_ini.replace(day=1)
-    while pm <= d_fim:
-        nxt = (pm.replace(year=pm.year + 1, month=1)
-               if pm.month == 12 else pm.replace(month=pm.month + 1))
-        nome = f"metrica_minuto_app_{pm.year:04d}_{pm.month:02d}"
-        stmts.append((nome, pm, nxt, "metrica_minuto_app"))
-        pm = nxt
-
     with conn.cursor() as cur:
-        for nome, ini, fim, parent in stmts:
-            # nome/datas são gerados internamente (sem input externo) — seguro interpolar.
-            cur.execute(
-                f'CREATE TABLE IF NOT EXISTS metricas."{nome}" '
-                f'PARTITION OF metricas.{parent} '
-                f"FOR VALUES FROM ('{ini.isoformat()}') TO ('{fim.isoformat()}')"
-            )
+        cur.execute("SELECT metricas.criar_particoes_intervalo(%s, %s);", (d_ini, d_fim))

@@ -23,7 +23,7 @@ import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from . import db
+from . import db, schema
 from .mimir import LinhaStaging
 from .settings import configurar_logging
 
@@ -95,6 +95,8 @@ def main() -> None:
     log.info("import iniciado", extra={"metrica": origem})
 
     try:
+        if os.getenv("APLICAR_SCHEMA", "true").lower() not in ("0", "false", "no"):
+            schema.aplicar_schema(conn)
         tz = ZoneInfo(db.timezone_negocio(conn))
         reader = csv.DictReader(fonte)
         faltando = [c for c in COLUNAS if c not in (reader.fieldnames or [])]

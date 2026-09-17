@@ -1,22 +1,41 @@
 -- ============================================================================
--- DDL extraído de analitico-metrica-ddl/modelagem_metricas_otel_postgres.md (v2)
--- Fonte de verdade do schema. NÃO alterar aqui — sincronizar com o documento.
--- Usado pelo docker-compose para provisionar o Postgres local de desenvolvimento.
+-- SCHEMA ÚNICO E COMPLETO do banco analítico (`metricas`).
+--
+-- Fonte de verdade do DDL. Não existem migrations incrementais: este arquivo
+-- descreve o estado final desejado e é 100% IDEMPOTENTE — pode ser reaplicado
+-- em banco vazio ou já provisionado, quantas vezes for necessário.
+--
+-- Aplicado automaticamente pelo `metricas-loader` no boot
+-- (`loader.schema.aplicar_schema`, protegido por advisory lock).
+-- Também pode ser aplicado manualmente:
+--     psql "$POSTGRES_DSN" -v ON_ERROR_STOP=1 -f src/loader/sql/schema.sql
+--
+-- REGRA DE EVOLUÇÃO (enquanto o produto não está em produção): alterações de
+-- modelo são editadas AQUI, no lugar onde o objeto é definido. Nada de arquivos
+-- `NNN_alter_*.sql`. Se a mudança não for compatível com bases existentes de
+-- desenvolvimento, recrie a base (`docker compose down -v`).
+--
+-- Documento de referência: analitico-metrica-ddl/modelagem_metricas_otel_postgres.md
 -- ============================================================================
 
 -- 1. Schema e configurações iniciais ----------------------------------------
 CREATE SCHEMA IF NOT EXISTS metricas;
-SET search_path TO metricas;
 
-CREATE TABLE IF NOT EXISTS config (
+CREATE TABLE IF NOT EXISTS metricas.config (
     chave text PRIMARY KEY,
     valor text NOT NULL
 );
-INSERT INTO config VALUES ('timezone_negocio', 'America/Sao_Paulo')
+
+INSERT INTO metricas.config (chave, valor)
+VALUES ('timezone_negocio', 'America/Sao_Paulo'),
+       ('schema_versao', '2')
 ON CONFLICT (chave) DO NOTHING;
 
+-- Mantém a versão do schema em dia mesmo em bases já provisionadas.
+UPDATE metricas.config SET valor = '2' WHERE chave = 'schema_versao' AND valor <> '2';
+
 -- 2. Dimensão de séries ------------------------------------------------------
-CREATE TABLE dim_serie (
+CREATE TABLE IF NOT EXISTS metricas.dim_serie (
     serie_id  int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     produto   text NOT NULL,
     app       text NOT NULL,
@@ -27,34 +46,36 @@ CREATE TABLE dim_serie (
     UNIQUE (produto, app, jornada, escopo, status)
 );
 
-CREATE INDEX idx_dim_serie_app ON dim_serie (app);
+CREATE INDEX IF NOT EXISTS idx_dim_serie_app ON metricas.dim_serie (app);
 
 -- 3. Fato detalhado — minuto (retenção 24 meses, partição semanal) -----------
-CREATE TABLE metrica_minuto (
+CREATE TABLE IF NOT EXISTS metricas.metrica_minuto (
     ts       timestamptz NOT NULL,   -- minuto truncado, UTC
     serie_id int         NOT NULL,
     valor    bigint      NOT NULL,   -- incremento (delta) naquele minuto
     PRIMARY KEY (serie_id, ts)
 ) PARTITION BY RANGE (ts);
 
-CREATE INDEX idx_metrica_minuto_ts_brin ON metrica_minuto USING brin (ts);
+CREATE INDEX IF NOT EXISTS idx_metrica_minuto_ts_brin
+    ON metricas.metrica_minuto USING brin (ts);
 -- NOTA: o doc-fonte traz `ALTER TABLE ... SET (fillfactor = 100)`, mas o Postgres
 -- rejeita storage params na tabela particionada-pai. fillfactor=100 já é o default
 -- (tabelas append-only), então a linha foi omitida sem mudança de comportamento.
 
 -- 4. Rollup por app — minuto (retenção 24 meses, partição mensal) ------------
-CREATE TABLE metrica_minuto_app (
+CREATE TABLE IF NOT EXISTS metricas.metrica_minuto_app (
     ts    timestamptz NOT NULL,
     app   text        NOT NULL,
     valor bigint      NOT NULL,
     PRIMARY KEY (app, ts)
 ) PARTITION BY RANGE (ts);
 
-CREATE INDEX idx_metrica_minuto_app_ts_brin ON metrica_minuto_app USING brin (ts);
+CREATE INDEX IF NOT EXISTS idx_metrica_minuto_app_ts_brin
+    ON metricas.metrica_minuto_app USING brin (ts);
 -- fillfactor=100 (default) — ver nota acima; omitido por ser partitioned-parent.
 
 -- 5. Tabelas analíticas por alvo (app ou série) ------------------------------
-CREATE TABLE metrica_dia_alvo (
+CREATE TABLE IF NOT EXISTS metricas.metrica_dia_alvo (
     nivel text   NOT NULL CHECK (nivel IN ('app','serie')),
     alvo  text   NOT NULL,
     dia   date   NOT NULL,   -- dia no fuso de negócio
@@ -62,7 +83,7 @@ CREATE TABLE metrica_dia_alvo (
     PRIMARY KEY (nivel, alvo, dia)
 );
 
-CREATE TABLE perfil_mediano_alvo (
+CREATE TABLE IF NOT EXISTS metricas.perfil_mediano_alvo (
     nivel    text    NOT NULL CHECK (nivel IN ('app','serie')),
     alvo     text    NOT NULL,
     tipo_dia text    NOT NULL CHECK (tipo_dia IN ('util','fds')),
@@ -71,7 +92,7 @@ CREATE TABLE perfil_mediano_alvo (
     PRIMARY KEY (nivel, alvo, tipo_dia, horario)
 );
 
-CREATE TABLE stats_alvo (
+CREATE TABLE IF NOT EXISTS metricas.stats_alvo (
     nivel                text NOT NULL CHECK (nivel IN ('app','serie')),
     alvo                 text NOT NULL,
     dia_recorde          date,
@@ -84,7 +105,7 @@ CREATE TABLE stats_alvo (
 );
 
 -- 6. Staging da carga (Python -> COPY) ---------------------------------------
-CREATE UNLOGGED TABLE staging_metrica (
+CREATE UNLOGGED TABLE IF NOT EXISTS metricas.staging_metrica (
     ts      timestamptz NOT NULL,
     produto text NOT NULL,
     app     text NOT NULL,
@@ -95,9 +116,11 @@ CREATE UNLOGGED TABLE staging_metrica (
 );
 
 -- 7. Gestão de partições -----------------------------------------------------
-CREATE OR REPLACE FUNCTION criar_particoes(p_semanas_futuras int DEFAULT 4,
-                                           p_meses_futuros  int DEFAULT 2)
-RETURNS void LANGUAGE plpgsql AS $$
+-- Todas as rotinas fixam `search_path` para não dependerem da sessão do chamador
+-- (o loader conecta com o search_path default e chama `metricas.<rotina>()`).
+CREATE OR REPLACE FUNCTION metricas.criar_particoes(p_semanas_futuras int DEFAULT 4,
+                                                    p_meses_futuros  int DEFAULT 2)
+RETURNS void LANGUAGE plpgsql SET search_path = metricas, pg_catalog AS $$
 DECLARE
     d_ini date; d_fim date; nome text; i int;
 BEGIN
@@ -124,8 +147,43 @@ BEGIN
     END LOOP;
 END $$;
 
-CREATE OR REPLACE FUNCTION aplicar_retencao()
-RETURNS void LANGUAGE plpgsql AS $$
+-- Partições RETROATIVAS cobrindo [p_ini, p_fim] — usada por backfill/import CSV.
+-- Mesma convenção de nomes de `criar_particoes()`: semanal ISO em metrica_minuto,
+-- mensal em metrica_minuto_app.
+CREATE OR REPLACE FUNCTION metricas.criar_particoes_intervalo(p_ini date, p_fim date)
+RETURNS void LANGUAGE plpgsql SET search_path = metricas, pg_catalog AS $$
+DECLARE
+    d date; nome text;
+BEGIN
+    IF p_ini IS NULL OR p_fim IS NULL OR p_fim < p_ini THEN
+        RAISE EXCEPTION 'intervalo inválido: % a %', p_ini, p_fim;
+    END IF;
+
+    d := date_trunc('week', p_ini::timestamp)::date;
+    WHILE d <= p_fim LOOP
+        nome := format('metrica_minuto_%s', to_char(d, 'IYYY"w"IW'));
+        IF to_regclass('metricas.' || nome) IS NULL THEN
+            EXECUTE format(
+                'CREATE TABLE metricas.%I PARTITION OF metricas.metrica_minuto
+                 FOR VALUES FROM (%L) TO (%L)', nome, d, d + 7);
+        END IF;
+        d := d + 7;
+    END LOOP;
+
+    d := date_trunc('month', p_ini::timestamp)::date;
+    WHILE d <= p_fim LOOP
+        nome := format('metrica_minuto_app_%s', to_char(d, 'YYYY_MM'));
+        IF to_regclass('metricas.' || nome) IS NULL THEN
+            EXECUTE format(
+                'CREATE TABLE metricas.%I PARTITION OF metricas.metrica_minuto_app
+                 FOR VALUES FROM (%L) TO (%L)', nome, d, (d + interval '1 month')::date);
+        END IF;
+        d := (d + interval '1 month')::date;
+    END LOOP;
+END $$;
+
+CREATE OR REPLACE FUNCTION metricas.aplicar_retencao()
+RETURNS void LANGUAGE plpgsql SET search_path = metricas, pg_catalog AS $$
 DECLARE
     r record;
     lim_24m date := (date_trunc('month', current_date) - interval '24 months')::date;
@@ -151,8 +209,8 @@ BEGIN
 END $$;
 
 -- 8. Procedure de carga (staging -> tabelas finais) --------------------------
-CREATE OR REPLACE PROCEDURE processar_staging()
-LANGUAGE plpgsql AS $$
+CREATE OR REPLACE PROCEDURE metricas.processar_staging()
+LANGUAGE plpgsql SET search_path = metricas, pg_catalog AS $$
 DECLARE tz text := (SELECT valor FROM config WHERE chave = 'timezone_negocio');
 BEGIN
     INSERT INTO dim_serie (produto, app, jornada, escopo, status)
@@ -166,9 +224,20 @@ BEGIN
     GROUP BY s.ts, d.serie_id
     ON CONFLICT (serie_id, ts) DO UPDATE SET valor = EXCLUDED.valor;
 
+    -- Rollup por app: recalculado a partir de `metrica_minuto` (e NÃO da staging).
+    -- A staging pode conter só um subconjunto das métricas — é o caso da carga
+    -- histórica por métrica (`loader.historico`) e de uma métrica inativa no
+    -- worker. Somar só a staging sobrescreveria a contribuição dos demais
+    -- produtos que compartilham o mesmo `app`, corrompendo o rollup.
     INSERT INTO metrica_minuto_app (ts, app, valor)
-    SELECT ts, app, sum(valor) FROM staging_metrica
-    GROUP BY ts, app
+    SELECT m.ts, d.app, sum(m.valor)
+    FROM metrica_minuto m
+    JOIN dim_serie d USING (serie_id)
+    JOIN (SELECT DISTINCT app, ts FROM staging_metrica) a
+      ON a.app = d.app AND a.ts = m.ts
+    WHERE m.ts >= (SELECT min(ts) FROM staging_metrica)   -- ajuda o partition pruning
+      AND m.ts <= (SELECT max(ts) FROM staging_metrica)
+    GROUP BY m.ts, d.app
     ON CONFLICT (app, ts) DO UPDATE SET valor = EXCLUDED.valor;
 
     INSERT INTO metrica_dia_alvo (nivel, alvo, dia, total)
@@ -195,8 +264,8 @@ BEGIN
 END $$;
 
 -- 9. Jobs diários — perfil mediano e stats -----------------------------------
-CREATE OR REPLACE PROCEDURE atualizar_perfil_mediano()
-LANGUAGE plpgsql AS $$
+CREATE OR REPLACE PROCEDURE metricas.atualizar_perfil_mediano()
+LANGUAGE plpgsql SET search_path = metricas, pg_catalog AS $$
 DECLARE
     tz  text := (SELECT valor FROM config WHERE chave = 'timezone_negocio');
     ini timestamptz;
@@ -228,8 +297,8 @@ BEGIN
     DO UPDATE SET mediana = EXCLUDED.mediana;
 END $$;
 
-CREATE OR REPLACE PROCEDURE atualizar_stats_alvo(p_dia date DEFAULT current_date - 1)
-LANGUAGE plpgsql AS $$
+CREATE OR REPLACE PROCEDURE metricas.atualizar_stats_alvo(p_dia date DEFAULT current_date - 1)
+LANGUAGE plpgsql SET search_path = metricas, pg_catalog AS $$
 DECLARE
     tz  text := (SELECT valor FROM config WHERE chave = 'timezone_negocio');
     ini timestamptz := p_dia::timestamp AT TIME ZONE tz;
@@ -282,14 +351,14 @@ BEGIN
     WHERE s.nivel = 'serie' AND s.alvo = x.serie_id::text;
 END $$;
 
--- 10. Functions de interface -------------------------------------------------
-CREATE OR REPLACE FUNCTION fn_grafico(p_nivel text, p_alvo text,
-                                      p_dia_a date, p_dia_b date)
+-- 10. Functions de interface (contrato do plugin-analitico) ------------------
+CREATE OR REPLACE FUNCTION metricas.fn_grafico(p_nivel text, p_alvo text,
+                                               p_dia_a date, p_dia_b date)
 RETURNS TABLE (horario time,
                dia_analisado bigint,
                dia_comparativo bigint,
                dia_recorde bigint)
-LANGUAGE plpgsql STABLE AS $$
+LANGUAGE plpgsql STABLE SET search_path = metricas, pg_catalog AS $$
 DECLARE
     tz    text := (SELECT valor FROM config WHERE chave = 'timezone_negocio');
     dia_r date := (SELECT s.dia_recorde FROM stats_alvo s
@@ -331,9 +400,9 @@ BEGIN
     END IF;
 END $$;
 
-CREATE OR REPLACE FUNCTION fn_perfil(p_nivel text, p_alvo text, p_dia date)
+CREATE OR REPLACE FUNCTION metricas.fn_perfil(p_nivel text, p_alvo text, p_dia date)
 RETURNS TABLE (horario time, mediana numeric)
-LANGUAGE sql STABLE AS $$
+LANGUAGE sql STABLE SET search_path = metricas, pg_catalog AS $$
     SELECT p.horario, p.mediana
     FROM metricas.perfil_mediano_alvo p
     WHERE p.nivel = p_nivel AND p.alvo = p_alvo
@@ -342,5 +411,5 @@ LANGUAGE sql STABLE AS $$
     ORDER BY p.horario;
 $$;
 
--- 11. Partições iniciais -----------------------------------------------------
+-- 11. Partições iniciais (idempotente) ---------------------------------------
 SELECT metricas.criar_particoes(4, 2);

@@ -143,7 +143,7 @@ metricas-loader/
 
 ### 9. Critérios de aceite
 
-- [ ] `docker compose up` sobe Postgres local, aplica o DDL (`modelagem_metricas_otel_postgres.md` extraído para `sql/init.sql` no compose) e o loader roda contra um mock/stub do Mimir.
+- [ ] `docker compose up` sobe Postgres local **vazio**; o próprio loader aplica o DDL único e idempotente (`src/loader/sql/schema.sql`) no boot e roda contra um mock/stub do Mimir.
 - [ ] Rodar a mesma janela duas vezes não altera os totais no banco (idempotência comprovada em teste).
 - [ ] Derrubar o processo no meio de uma janela e religar retoma do watermark sem perda nem duplicação.
 - [ ] Métrica adicionada ao JSON entra na carga na rodada seguinte, sem restart.

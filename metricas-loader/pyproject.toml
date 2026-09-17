@@ -18,6 +18,7 @@ dev = [
 
 [project.scripts]
 metricas-loader = "loader.__main__:main"
+metricas-historico = "loader.historico:main"
 
 [build-system]
 requires = ["hatchling"]

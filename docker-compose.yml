@@ -151,8 +151,8 @@ services:
       POSTGRES_PASSWORD: metricas
       POSTGRES_DB: metricas
     volumes:
-      # DDL aplicado no primeiro boot (schema, procedures, functions, partições).
-      - ./metricas-loader/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Sem DDL aqui: quem provisiona o schema `metricas` (tabelas, partições,
+      # procedures e functions) é o próprio metricas-loader, no boot.
       - metricas-pg-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
@@ -178,10 +178,12 @@ services:
       INTERVALO_SEGUNDOS: "600"
       JANELA_MINUTOS: "30"
       ATRASO_MINUTOS: "3"
-      JANELA_INICIAL_MINUTOS: "60"
+      JANELA_INICIAL_MINUTOS: "5"
       CONFIG_METRICAS_PATH: /app/config/metricas.json
       LOG_LEVEL: INFO
       MODO: worker
+      # Aplica o DDL único (src/loader/sql/schema.sql) no boot — idempotente.
+      APLICAR_SCHEMA: "true"
     volumes:
       - ./metricas-loader/config:/app/config:ro
     depends_on:

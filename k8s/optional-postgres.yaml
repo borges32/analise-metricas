@@ -9,9 +9,8 @@
 #   oc -n metricas adm policy add-scc-to-user anyuid -z metricas-postgres
 # (ou troque pela imagem sclorg/RHEL que suporta UID arbitrário).
 #
-# O schema é aplicado no primeiro boot a partir de um ConfigMap gerado do init.sql:
-#   oc -n metricas create configmap metricas-postgres-init \
-#     --from-file=init.sql=metricas-loader/sql/init.sql
+# NÃO é preciso provisionar o schema aqui: o metricas-loader aplica o DDL único
+# (src/loader/sql/schema.sql) no boot, de forma idempotente.
 # =============================================================================
 apiVersion: v1
 kind: ServiceAccount
@@ -84,9 +83,6 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
-            - name: init
-              mountPath: /docker-entrypoint-initdb.d
-              readOnly: true
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "metricas", "-d", "metricas"]
@@ -101,10 +97,6 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
-      volumes:
-        - name: init
-          configMap:
-            name: metricas-postgres-init
   volumeClaimTemplates:
     - metadata:
         name: data
