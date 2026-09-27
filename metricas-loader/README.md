@@ -30,7 +30,7 @@ docker exec metricas-loader python -m loader.historico \
   --metrica bradesco_app_mobilepf_total --inicio 2026-09-01 --fim 2026-09-10
 
 # No OpenShift:
-oc -n metricas rsh deploy/metricas-loader \
+oc -n metricas exec deploy/metricas-loader -- \
   python -m loader.historico --metrica ... --inicio ... --fim ...
 ```
 
@@ -209,12 +209,8 @@ docker exec -i metricas-loader python -m loader.import_csv < historico.csv
 docker exec metricas-loader python -m loader.import_csv --file /data/historico.csv
 ```
 
-**Opção C — abrindo um shell no container:**
-
-```bash
-docker exec -it metricas-loader sh
-python -m loader.import_csv --file /data/historico.csv
-```
+> A imagem é *distroless*: **não há shell** (`docker exec ... sh` não funciona).
+> Chame sempre o `python` direto, como acima.
 
 ### No OpenShift (`oc`)
 
@@ -230,19 +226,14 @@ POD=$(oc get pods -l app=metricas-loader -o jsonpath='{.items[0].metadata.name}'
 oc exec -i "$POD" -- python -m loader.import_csv < historico.csv
 ```
 
-Alternativa — copiar o arquivo para o pod e usar `--file`:
+Parâmetros adicionais vão depois do módulo, normalmente:
 
 ```bash
-oc cp historico.csv "$POD":/tmp/historico.csv
-oc exec "$POD" -- python -m loader.import_csv --file /tmp/historico.csv --batch 100000
+oc exec -i "$POD" -- python -m loader.import_csv --batch 100000 < historico.csv
 ```
 
-Ou abrir um shell no pod (`oc rsh`) e rodar interativamente:
-
-```bash
-oc rsh "$POD"
-python -m loader.import_csv --file /tmp/historico.csv
-```
+> Sem shell e sem `tar` na imagem: `oc rsh` e `oc cp` **não funcionam** neste
+> pod. Use `oc exec` + stdin, como acima.
 
 > Dica: se preferir uma execução isolada (sem usar o pod do worker), rode como um
 > Job pontual com a mesma imagem, montando o CSV via ConfigMap/volume:
@@ -269,3 +260,65 @@ python -m loader.import_csv --file /tmp/historico.csv
   carregado e `atualizar_perfil_mediano()`, populando o que o plugin/API consomem.
 - **Streaming em lotes**: arquivos grandes são processados sem carregar tudo em
   memória (lotes de `--batch` linhas).
+
+## Segurança da imagem
+
+A imagem usa **Chainguard** (`cgr.dev/chainguard/python`, distro Wolfi), feita
+para ter o mínimo de pacotes e CVEs corrigidas diariamente:
+
+- **runtime distroless** — só o Python e as libs de que ele precisa. Sem shell,
+  sem gerenciador de pacotes, sem `pip`, sem `tar`. Usuário non-root (UID 65532);
+  roda também com o UID arbitrário da SCC `restricted-v2` do OpenShift.
+- **build em dois estágios** — `latest-dev` (com shell e pip) só monta o venv;
+  o estágio final recebe apenas o venv pronto.
+- **fusos horários pelo pacote `tzdata`** (dependência do projeto) — a imagem não
+  tem `/usr/share/zoneinfo`, e o loader depende de `America/Sao_Paulo`.
+
+Comparativo medido na troca (Trivy / Grype, total de CVEs):
+
+| Base | Tamanho | Trivy | Grype |
+| --- | --- | --- | --- |
+| `python:3.12-slim` (v2 publicado) | 166 MB | 290 (3 Critical, 84 High) | — |
+| `python:3.12-slim` + upgrade + sem pip | 159 MB | 156 (44 High) | 162 (50 High) |
+| Red Hat UBI 9 `python-312-minimal` | 239 MB | 250 (12 High) | 244 (11 High) |
+| **Chainguard** | **111 MB** | **0** | **6 Medium, sem correção** |
+
+### Cuidados
+
+- **Versão do Python não é fixa.** O plano gratuito da Chainguard publica só a
+  tag `latest` (hoje Python 3.14). Um rebuild pode trazer um Python novo. O build
+  **falha** (não a produção) se o venv não rodar no Python do runtime — há uma
+  verificação no fim do [Dockerfile](Dockerfile). Rode os testes antes de publicar.
+  Fixar a versão (ex.: 3.12) exige a assinatura paga da Chainguard.
+- **Sempre `--pull`.** Builder e runtime precisam vir do mesmo pull.
+- **Rebuild periódico** é o que mantém o relatório zerado — a Chainguard
+  corrige as CVEs na imagem base, mas elas só entram num build novo:
+
+```bash
+docker build --pull --no-cache -t quay.io/alexandre2025/analise-metricas:<tag> .
+```
+
+- **Diagnóstico sem shell:** use `docker exec metricas-loader python -c "..."`,
+  ou um container efêmero de debug no mesmo namespace de rede.
+
+### Conferir antes de publicar
+
+Use **dois scanners** — na avaliação, o Trivy deu um "zero" falso para RHEL 10
+que o Grype não confirmou:
+
+```bash
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest \
+  image --scanners vuln quay.io/alexandre2025/analise-metricas:<tag>
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/grype:latest \
+  quay.io/alexandre2025/analise-metricas:<tag>
+```
+
+CVEs residuais (sem correção publicada), avaliadas como **não alcançáveis**:
+
+| CVE | Pacote | Por que não se aplica |
+| --- | --- | --- |
+| CVE-2026-77117, CVE-2026-80489 | glibc | Conversão de charsets japoneses (SHIFT_JISX0213/EUC_JISX0213); o loader só trata UTF-8. |
+| CVE-2026-8674 | glibc | Leitura de `/etc/resolv.conf` malicioso; o arquivo vem do runtime do container, fora do alcance de um atacante. |
+| CVE-2026-89092 | glibc | Falha no serviço `nscd`, que não existe na imagem. |
+| CVE-2026-87910 | python (`tarfile`) | Extração de tar em sistema sem links; o loader não extrai tar. |
+| CVE-2025-15367 | python (`poplib`) | Cliente POP3; o loader não usa e-mail. |

@@ -105,7 +105,7 @@ Com `MODO=backfill`, o processo não entra em loop: itera as janelas de `BACKFIL
 ```
 metricas-loader/
 ├── pyproject.toml            # deps: psycopg[binary]>=3.1, httpx, pydantic, pydantic-settings
-├── Dockerfile                # python:3.12-slim, multi-stage, non-root user, ENTRYPOINT python -m loader
+├── Dockerfile                # Chainguard (distroless), multi-stage, non-root user, ENTRYPOINT python -m loader
 ├── docker-compose.yml        # loader + postgres local para desenvolvimento
 ├── config/
 │   └── metricas.example.json

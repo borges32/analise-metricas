@@ -47,7 +47,9 @@ spec:
     to:
       kind: ImageStreamTag
       name: metricas-loader:latest
-  # Rebuilda automaticamente quando a imagem base (python:3.12-slim) muda.
+  # ConfigChange rebuilda quando o BuildConfig muda. A imagem base
+  # (cgr.dev/chainguard/python) NÃO é monitorada: agende um rebuild periódico
+  # (ex.: CronJob com `oc start-build`) para absorver as correções de CVE.
   triggers:
     - type: ConfigChange
     - type: ImageChange

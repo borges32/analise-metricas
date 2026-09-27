@@ -86,7 +86,7 @@ lock — apontar o `POSTGRES_DSN` para um banco vazio é suficiente.
 
 ```bash
 # Provisionar sem subir o worker (Job/initContainer):
-docker exec metricas-loader env MODO=schema python -m loader
+docker exec -e MODO=schema metricas-loader python -m loader
 
 # Ou aplicar o arquivo direto:
 psql "$POSTGRES_DSN" -v ON_ERROR_STOP=1 -f metricas-loader/src/loader/sql/schema.sql
@@ -112,7 +112,7 @@ docker exec metricas-loader python -m loader.historico \
 No OpenShift/ARO, a mesma chamada dentro do pod:
 
 ```bash
-oc -n metricas rsh deploy/metricas-loader \
+oc -n metricas exec deploy/metricas-loader -- \
   python -m loader.historico --metrica bradesco_app_mobilepf_total \
   --inicio 2026-09-01 --fim 2026-09-10
 ```

@@ -8,6 +8,9 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
+    # Base de fusos do zoneinfo embarcada no pacote: a imagem distroless
+    # (Chainguard) não tem /usr/share/zoneinfo.
+    "tzdata>=2025.1",
 ]
 
 [project.optional-dependencies]
